@@ -173,7 +173,7 @@ async def on_ready():
         ))
     monitor.start()
 
-@tasks.loop(seconds=20)
+@tasks.loop(seconds=180)
 async def monitor():
     channel = client.get_channel(CHANNEL_ID)
     if channel is None:
