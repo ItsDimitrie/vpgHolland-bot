@@ -10,7 +10,22 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID    = int(os.getenv("CHANNEL_ID", "0"))
 STATE_FILE    = os.getenv("STATE_FILE", "last_id.json")
-API_URL = "https://api.virtualprogaming.com/public/communities/Holland/movement/?limit=12&offset=0"
+
+# --- feeds to monitor ---
+SOURCES = [
+    {
+        "key": "Holland",
+        "label": "Holland",
+        "api": "https://api.virtualprogaming.com/public/communities/Holland/movement/?limit=12&offset=0",
+        "color": discord.Color.blurple(),
+    },
+    {
+        "key": "Holland-5v5-next",
+        "label": "Holland 5v5 Next",
+        "api": "https://api.virtualprogaming.com/public/communities/Holland-5v5-next/movement/?limit=12&offset=0",
+        "color": discord.Color.orange(),
+    },
+]
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -20,17 +35,27 @@ client = discord.Client(intents=intents)
 logo_cache: dict[str, str] = {}     # slug -> absolute image URL
 imageid_cache: dict[str, str] = {}  # image_id -> absolute image URL
 
-def load_last_id() -> int:
+def _empty_state():
+    return {"last_ids": {src["key"]: 0 for src in SOURCES}}
+
+def load_state() -> dict:
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return int(json.load(f).get("last_id", 0))
+            data = json.load(f)
+        # backward compatibility with old single-feed format
+        if "last_ids" not in data:
+            data = _empty_state()
+        # ensure keys for all sources exist
+        for src in SOURCES:
+            data["last_ids"].setdefault(src["key"], 0)
+        return data
     except Exception:
-        return 0
+        return _empty_state()
 
-def save_last_id(last_id: int) -> None:
+def save_state(state: dict) -> None:
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"last_id": int(last_id)}, f)
+            json.dump(state, f)
     except Exception:
         pass
 
@@ -110,20 +135,20 @@ async def fetch_logo_from_slug(session: aiohttp.ClientSession, slug: str | None)
         return None
     return None
 
-async def build_embed(session: aiohttp.ClientSession, r: dict) -> discord.Embed:
+async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, src_color: discord.Color) -> discord.Embed:
     user = r.get("username") or "unknown"
     frm_name, frm_slug, frm_logo = r.get("from_name"), r.get("from_slug"), r.get("from_logo")
     to_name,  to_slug,  to_logo  = r.get("to_name"),   r.get("to_slug"),   r.get("to_logo")
     amt = r.get("amount") or 0
     ts  = r.get("datetime")
 
-    title = f"Transfer: {user}"
+    title = f"[{src_label}] Transfer: {user}"
     desc  = f"{(frm_name or 'Free agent')} → {(to_name or 'Free agent')}"
 
     emb = discord.Embed(
         title=title,
         description=desc,
-        color=discord.Color.blurple(),
+        color=src_color,
         timestamp=datetime.fromisoformat(ts.replace("Z","+00:00")) if ts else None
     )
 
@@ -166,9 +191,10 @@ def rid(x) -> int:
 async def on_ready():
     channel = client.get_channel(CHANNEL_ID)
     if channel:
+        labels = ", ".join(src["label"] for src in SOURCES)
         await channel.send(embed=discord.Embed(
             title="Transfer bot online",
-            description="Monitoring Holland movement feed.",
+            description=f"Monitoring feeds: {labels}.",
             color=discord.Color.green()
         ))
     monitor.start()
@@ -178,38 +204,47 @@ async def monitor():
     channel = client.get_channel(CHANNEL_ID)
     if channel is None:
         return
-    last_seen = load_last_id()
+
+    state = load_state()
+
     try:
         timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(API_URL, headers={"Accept":"application/json"}) as resp:
-                if resp.status != 200:
-                    return
-                payload = await resp.json()
-            rows = payload.get("data", [])
-            if not rows:
-                return
-
-            new_items = [r for r in rows if rid(r) > last_seen]
-            if not new_items:
-                return
-
-            new_items.sort(key=rid)  # oldest first
-            for r in new_items:
+            for src in SOURCES:
+                last_seen = int(state["last_ids"].get(src["key"], 0))
                 try:
-                    embed = await build_embed(session, r)
-                    await channel.send(embed=embed)
+                    async with session.get(src["api"], headers={"Accept":"application/json"}) as resp:
+                        if resp.status != 200:
+                            continue
+                        payload = await resp.json()
+                    rows = payload.get("data", [])
+                    if not rows:
+                        continue
+
+                    new_items = [r for r in rows if rid(r) > last_seen]
+                    if not new_items:
+                        continue
+
+                    new_items.sort(key=rid)  # oldest first
+                    for r in new_items:
+                        try:
+                            embed = await build_embed(session, r, src_label=src["label"], src_color=src["color"])
+                            await channel.send(embed=embed)
+                        except Exception:
+                            # fallback text
+                            frm = r.get("from_name") or "Free agent"
+                            to  = r.get("to_name") or "Free agent"
+                            user = r.get("username") or "unknown"
+                            await channel.send(f"[{src['label']}] Transfer: **{user}** — {frm} → {to} • {when_str(r.get('datetime'))}")
+                        last_seen = max(last_seen, rid(r))
+
+                    state["last_ids"][src["key"]] = last_seen
                 except Exception:
-                    # fallback text
-                    frm = r.get("from_name") or "Free agent"
-                    to  = r.get("to_name") or "Free agent"
-                    user = r.get("username") or "unknown"
-                    await channel.send(f"Transfer: **{user}** — {frm} → {to} • {when_str(r.get('datetime'))}")
-                last_seen = max(last_seen, rid(r))
+                    continue
     except Exception:
-        return
+        pass
     finally:
-        save_last_id(last_seen)
+        save_state(state)
 
 if __name__ == "__main__":
     if not DISCORD_TOKEN or CHANNEL_ID <= 0:
