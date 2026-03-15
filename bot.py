@@ -15,13 +15,13 @@ STATE_FILE    = os.getenv("STATE_FILE", "last_id.json")
 SOURCES = [
     {
         "key": "Holland",
-        "label": "Holland",
+        "label": "Eerste Divisie",
         "api": "https://api.virtualprogaming.com/public/communities/Holland/movement/?limit=12&offset=0",
-        "color": discord.Color.blurple(),
+        "color": discord.Color.orange(),
     },
     {
         "key": "Holland-5v5-next",
-        "label": "Holland 5v5 Next",
+        "label": "5v5 Divisie",
         "api": "https://api.virtualprogaming.com/public/communities/Holland-5v5-next/movement/?limit=12&offset=0",
         "color": discord.Color.orange(),
     },
@@ -154,9 +154,10 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
     )
 
     emb.set_author(name=f"{user}  ·  {src_label}")
-    emb.add_field(name="Fee", value=fee, inline=True)
+    emb.add_field(name="Fee", value=Prijs, inline=True)
     emb.set_footer(text=when_str(ts))
-
+    emb.set_thumbnail(url="https://virtualprogaming.com/cdn-cgi/imagedelivery/cl8ocWLdmZDs72LEaQYaYw/35671fd9-4517-429d-4b27-9475107e0600/public")  # default thumbnail
+    
     # Resolve images
     avatar_url    = await resolve_image_id(session, r.get("avatar"))
     to_logo_url   = await resolve_image_id(session, to_logo)   or await fetch_logo_from_slug(session, to_slug)
