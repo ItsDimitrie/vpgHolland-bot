@@ -150,6 +150,7 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
         description=desc,
         color=src_color,
         timestamp=datetime.fromisoformat(ts.replace("Z","+00:00")) if ts else None
+        thumbnail="https://virtualprogaming.com/cdn-cgi/imagedelivery/cl8ocWLdmZDs72LEaQYaYw/35671fd9-4517-429d-4b27-9475107e0600/public"
     )
 
     # Linked fields if slugs exist
@@ -164,6 +165,7 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
 
     emb.add_field(name="Fee", value=str(amt), inline=True)
     emb.set_footer(text=when_str(ts))
+    emb.setThumbnail(url="https://virtualprogaming.com/cdn-cgi/imagedelivery/cl8ocWLdmZDs72LEaQYaYw/35671fd9-4517-429d-4b27-9475107e0600/public")
 
     # Try avatar by id
     avatar_url    = await resolve_image_id(session, r.get("avatar"))
@@ -231,10 +233,6 @@ async def monitor():
                             embed = await build_embed(session, r, src_label=src["label"], src_color=src["color"])
                             await channel.send(embed=embed)
                         except Exception:
-                            # fallback text
-                            frm = r.get("from_name") or "Free agent"
-                            to  = r.get("to_name") or "Free agent"
-                            user = r.get("username") or "unknown"
                             await channel.send(f"[{src['label']}] Transfer: **{user}** — {frm} → {to} • {when_str(r.get('datetime'))}")
                         last_seen = max(last_seen, rid(r))
 
