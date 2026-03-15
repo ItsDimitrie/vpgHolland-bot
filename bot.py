@@ -137,6 +137,8 @@ async def fetch_logo_from_slug(session: aiohttp.ClientSession, slug: str | None)
 
 async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, src_color: discord.Color) -> discord.Embed:
     user = r.get("username") or "unknown"
+    frm_name, frm_slug, frm_logo = r.get("from_name"), r.get("from_slug"), r.get("from_logo")
+    to_name,  to_slug,  to_logo  = r.get("to_name"),   r.get("to_slug"),   r.get("to_logo")
     amt = r.get("amount") or 0
     ts  = r.get("datetime")
 
@@ -147,7 +149,7 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
         title=title,
         description=desc,
         color=src_color,
-        timestamp=datetime.fromisoformat(ts.replace("Z","+00:00")) if ts else None,
+        timestamp=datetime.fromisoformat(ts.replace("Z","+00:00")) if ts else None
     )
 
     # Linked fields if slugs exist
