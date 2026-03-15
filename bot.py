@@ -11,9 +11,6 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID    = int(os.getenv("CHANNEL_ID", "0"))
 STATE_FILE    = os.getenv("STATE_FILE", "last_id.json")
 
-# Static image shown when a player has no club (free agent)
-FREE_AGENT_IMG = "https://virtualprogaming.com/media/default_avatar.png"  # replace with your preferred URL
-
 # --- feeds to monitor ---
 SOURCES = [
     {
@@ -157,7 +154,7 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
     )
 
     emb.set_author(name=f"{user}  ·  {src_label}")
-    emb.add_field(name="Fee", value=Prijs, inline=True)
+    emb.add_field(name="Fee", value=fee, inline=True)
     emb.set_footer(text=when_str(ts))
 
     # Resolve images
@@ -168,15 +165,10 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
     if avatar_url:
         emb.set_author(name=f"{user}  ·  {src_label}", icon_url=avatar_url)
 
-    # Thumbnail: show the club logo (destination if signing, source if releasing)
-    # Fall back to free agent image when neither side is a club
-    if to_name and to_logo_url:
-        logo = to_logo_url
-    elif frm_name and from_logo_url:
-        logo = from_logo_url
-    else:
-        logo = FREE_AGENT_IMG
-    emb.set_thumbnail(url=logo)
+    # Thumbnail: destination logo preferred, else source logo
+    logo = to_logo_url or from_logo_url
+    if logo:
+        emb.set_thumbnail(url=logo)
 
     return emb
 
