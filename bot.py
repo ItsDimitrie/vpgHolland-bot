@@ -247,6 +247,7 @@ async def monitor():
         save_state(state)
 
 if __name__ == "__main__":
+    print(f"[DEBUG] DISCORD_TOKEN set: {bool(DISCORD_TOKEN)}, CHANNEL_ID: {CHANNEL_ID!r}")
     if not DISCORD_TOKEN or CHANNEL_ID <= 0:
         raise SystemExit("Set DISCORD_TOKEN and a valid CHANNEL_ID in .env")
     client.run(DISCORD_TOKEN)
