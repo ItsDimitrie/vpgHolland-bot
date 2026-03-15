@@ -142,42 +142,33 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
     amt = r.get("amount") or 0
     ts  = r.get("datetime")
 
-    title = f"[{src_label}] Transfer: {user}"
-    desc  = f"{(frm_name or 'Free agent')} → {(to_name or 'Free agent')}"
+    fee = "Free" if not amt else str(amt)
+
+    frm_display = f"[{frm_name}](https://virtualprogaming.com/team/{frm_slug})" if frm_slug else (frm_name or "Free agent")
+    to_display  = f"[{to_name}](https://virtualprogaming.com/team/{to_slug})"   if to_slug  else (to_name  or "Free agent")
 
     emb = discord.Embed(
-        title=title,
-        description=desc,
+        description=f"## {frm_display}  →  {to_display}",
         color=src_color,
         timestamp=datetime.fromisoformat(ts.replace("Z","+00:00")) if ts else None
     )
 
-    # Linked fields if slugs exist
-    if frm_slug:
-        emb.add_field(name="From", value=f"[{frm_name or 'Free agent'}](https://virtualprogaming.com/team/{frm_slug})", inline=True)
-    else:
-        emb.add_field(name="From", value=frm_name or "Free agent", inline=True)
-    if to_slug:
-        emb.add_field(name="To", value=f"[{to_name or 'Free agent'}](https://virtualprogaming.com/team/{to_slug})", inline=True)
-    else:
-        emb.add_field(name="To", value=to_name or "Free agent", inline=True)
-
-    emb.add_field(name="Fee", value=str(amt), inline=True)
+    emb.set_author(name=f"{user}  ·  {src_label}")
+    emb.add_field(name="Fee", value=fee, inline=True)
     emb.set_footer(text=when_str(ts))
 
-    # Try avatar by id
+    # Resolve images
     avatar_url    = await resolve_image_id(session, r.get("avatar"))
-
-    # Prefer destination logo, then source. Try ID first, then slug scraping.
     to_logo_url   = await resolve_image_id(session, to_logo)   or await fetch_logo_from_slug(session, to_slug)
     from_logo_url = await resolve_image_id(session, frm_logo)  or await fetch_logo_from_slug(session, frm_slug)
 
     if avatar_url:
-        emb.set_thumbnail(url=avatar_url)
+        emb.set_author(name=f"{user}  ·  {src_label}", icon_url=avatar_url)
 
-    big = to_logo_url or from_logo_url
-    if big:
-        emb.set_image(url=big)
+    # Thumbnail: destination logo preferred, else source logo
+    logo = to_logo_url or from_logo_url
+    if logo:
+        emb.set_thumbnail(url=logo)
 
     return emb
 
