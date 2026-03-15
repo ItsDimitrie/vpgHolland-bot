@@ -149,7 +149,7 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
         title=title,
         description=desc,
         color=src_color,
-        timestamp=datetime.fromisoformat(ts.replace("Z","+00:00")) if ts else None
+        timestamp=datetime.fromisoformat(ts.replace("Z","+00:00")) if ts else None,
         thumbnail="https://virtualprogaming.com/cdn-cgi/imagedelivery/cl8ocWLdmZDs72LEaQYaYw/35671fd9-4517-429d-4b27-9475107e0600/public"
     )
 
