@@ -233,6 +233,10 @@ async def monitor():
                             embed = await build_embed(session, r, src_label=src["label"], src_color=src["color"])
                             await channel.send(embed=embed)
                         except Exception:
+                            # fallback text
+                            frm = r.get("from_name") or "Free agent"
+                            to  = r.get("to_name") or "Free agent"
+                            user = r.get("username") or "unknown"
                             await channel.send(f"[{src['label']}] Transfer: **{user}** — {frm} → {to} • {when_str(r.get('datetime'))}")
                         last_seen = max(last_seen, rid(r))
 
