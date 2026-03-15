@@ -150,22 +150,17 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
         description=desc,
         color=src_color,
         timestamp=datetime.fromisoformat(ts.replace("Z","+00:00")) if ts else None,
-        thumbnail="https://virtualprogaming.com/cdn-cgi/imagedelivery/cl8ocWLdmZDs72LEaQYaYw/35671fd9-4517-429d-4b27-9475107e0600/public"
     )
 
     # Linked fields if slugs exist
     if frm_slug:
         emb.add_field(name="From", value=f"[{frm_name or 'Free agent'}](https://virtualprogaming.com/team/{frm_slug})", inline=True)
-    else:
-        emb.add_field(name="From", value=frm_name or "Free agent", inline=True)
+
     if to_slug:
         emb.add_field(name="To", value=f"[{to_name or 'Free agent'}](https://virtualprogaming.com/team/{to_slug})", inline=True)
-    else:
-        emb.add_field(name="To", value=to_name or "Free agent", inline=True)
 
     emb.add_field(name="Fee", value=str(amt), inline=True)
     emb.set_footer(text=when_str(ts))
-    emb.setThumbnail(url="https://virtualprogaming.com/cdn-cgi/imagedelivery/cl8ocWLdmZDs72LEaQYaYw/35671fd9-4517-429d-4b27-9475107e0600/public")
 
     # Try avatar by id
     avatar_url    = await resolve_image_id(session, r.get("avatar"))
@@ -249,8 +244,6 @@ async def monitor():
         save_state(state)
 
 if __name__ == "__main__":
-    print(f"[DEBUG] All env keys: {sorted(os.environ.keys())}")
-    print(f"[DEBUG] DISCORD_TOKEN set: {bool(DISCORD_TOKEN)}, CHANNEL_ID: {CHANNEL_ID!r}")
     if not DISCORD_TOKEN or CHANNEL_ID <= 0:
         raise SystemExit("Set DISCORD_TOKEN and a valid CHANNEL_ID in .env")
     client.run(DISCORD_TOKEN)
