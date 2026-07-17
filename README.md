@@ -18,3 +18,5 @@ A lightweight Discord bot that monitors the Virtual Pro Gaming **Holland Movemen
 - Permissions: **Send Messages** in the target channel.
 
 ---
+
+<img width="859" height="970" alt="image" src="https://github.com/user-attachments/assets/32108a38-d18c-4d03-a145-2c525b0a9f30" />
