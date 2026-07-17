@@ -1,15 +1,24 @@
 # requirements:
-#   pip install discord.py aiohttp python-dotenv
-import os, json, asyncio, aiohttp, discord, re
+#   pip install discord.py aiohttp python-dotenv Pillow
+import os, json, asyncio, aiohttp, discord, io
+from pathlib import Path
 from discord.ext import tasks
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
+from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID    = int(os.getenv("CHANNEL_ID", "0"))
 STATE_FILE    = os.getenv("STATE_FILE", "last_id.json")
+
+ASSETS_DIR  = Path(__file__).parent / "assets"
+ASSET_BASE  = "https://vpg-prod-user-uploads.fra1.cdn.digitaloceanspaces.com/"
+TEAM_API    = "https://api.virtualprogaming.com/public/teams/{slug}/"
+FONT_BOLD   = ASSETS_DIR / "DejaVuSans-Bold.ttf"
+FREE_AGENT_IMG   = ASSETS_DIR / "free_agent.png"
+DEFAULT_AVATAR_IMG = ASSETS_DIR / "default_avatar.png"
 
 # --- feeds to monitor ---
 SOURCES = [
@@ -20,9 +29,9 @@ SOURCES = [
         "color": discord.Color.orange(),
     },
     {
-        "key": "Holland-5v5-next",
-        "label": "5v5 Divisie",
-        "api": "https://api.virtualprogaming.com/public/communities/Holland-5v5-next/movement/?limit=12&offset=0",
+        "key": "Holland-6v6-next",
+        "label": "6v6 Divisie",
+        "api": "https://api.virtualprogaming.com/public/communities/Holland-6v6-next/movement/?limit=12&offset=0",
         "color": discord.Color.blurple(),
     },
 ]
@@ -32,8 +41,8 @@ intents.guilds = True
 client = discord.Client(intents=intents)
 
 # --- simple caches to avoid repeated fetches ---
-logo_cache: dict[str, str] = {}     # slug -> absolute image URL
-imageid_cache: dict[str, str] = {}  # image_id -> absolute image URL
+image_bytes_cache: dict[str, bytes | None] = {}   # image_id -> raw bytes (or None if unavailable)
+slug_logo_cache: dict[str, str | None] = {}       # team slug -> logo_id (fallback lookup)
 
 def _empty_state():
     return {"last_ids": {src["key"]: 0 for src in SOURCES}}
@@ -42,10 +51,8 @@ def load_state() -> dict:
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # backward compatibility with old single-feed format
         if "last_ids" not in data:
             data = _empty_state()
-        # ensure keys for all sources exist
         for src in SOURCES:
             data["last_ids"].setdefault(src["key"], 0)
         return data
@@ -68,74 +75,130 @@ def when_str(ts: str | None) -> str:
     except Exception:
         return ts or "unknown"
 
-async def probe_image(session: aiohttp.ClientSession, url: str | None) -> str | None:
-    if not url:
-        return None
-    try:
-        async with session.head(url, timeout=8, allow_redirects=True) as r:
-            ct = r.headers.get("content-type","").lower()
-            if r.status == 200 and ("image" in ct or ct == "application/octet-stream"):
-                return str(r.url)
-    except Exception:
-        return None
-    return None
-
-async def resolve_image_id(session: aiohttp.ClientSession, image_id: str | None) -> str | None:
-    """Try common CDN paths when API gives an image_id."""
+async def fetch_image_bytes(session: aiohttp.ClientSession, image_id: str | None) -> bytes | None:
+    """Fetch raw image bytes from the VPG asset CDN for a given image id."""
     if not image_id:
         return None
-    if image_id in imageid_cache:
-        return imageid_cache[image_id]
-
-    candidates = [
-        f"https://virtualprogaming.com/media/{image_id}.png",
-        f"https://virtualprogaming.com/media/{image_id}.webp",
-        f"https://api.virtualprogaming.com/public/media/{image_id}.png",
-        f"https://api.virtualprogaming.com/public/media/{image_id}.webp",
-    ]
-    for url in candidates:
-        ok = await probe_image(session, url)
-        if ok:
-            imageid_cache[image_id] = ok
-            return ok
+    if image_id in image_bytes_cache:
+        return image_bytes_cache[image_id]
+    try:
+        async with session.get(ASSET_BASE + image_id, timeout=10) as r:
+            if r.status == 200:
+                data = await r.read()
+                image_bytes_cache[image_id] = data
+                return data
+    except Exception:
+        pass
+    image_bytes_cache[image_id] = None
     return None
 
-async def fetch_logo_from_slug(session: aiohttp.ClientSession, slug: str | None) -> str | None:
-    """Fetch team page HTML and extract a logo URL via og:image or /media/... references."""
+async def fetch_logo_id_from_slug(session: aiohttp.ClientSession, slug: str | None) -> str | None:
+    """Fallback: look up a team's logo_id via the team detail API when the movement feed omits it."""
     if not slug:
         return None
-    if slug in logo_cache:
-        return logo_cache[slug]
-
-    page_url = f"https://virtualprogaming.com/team/{slug}"
+    if slug in slug_logo_cache:
+        return slug_logo_cache[slug]
+    logo_id = None
     try:
-        async with session.get(page_url, timeout=12) as resp:
-            if resp.status != 200:
-                return None
-            html = await resp.text()
-
-        # 1) Try Open Graph image
-        m = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', html, flags=re.I)
-        if m:
-            og = m.group(1)
-            ok = await probe_image(session, og)
-            if ok:
-                logo_cache[slug] = ok
-                return ok
-
-        # 2) Fallback: grab first /media/... image in HTML
-        m2 = re.search(r'(https?://[^"\']*/media/[^"\']+\.(?:png|webp|jpg|jpeg))', html, flags=re.I)
-        if m2:
-            url = m2.group(1)
-            ok = await probe_image(session, url)
-            if ok:
-                logo_cache[slug] = ok
-                return ok
+        async with session.get(TEAM_API.format(slug=slug), timeout=10) as r:
+            if r.status == 200:
+                payload = await r.json()
+                logo_id = payload.get("logo_id")
     except Exception:
-        return None
+        pass
+    slug_logo_cache[slug] = logo_id
+    return logo_id
+
+async def fetch_team_crest_bytes(session: aiohttp.ClientSession, logo_id: str | None, slug: str | None) -> bytes | None:
+    data = await fetch_image_bytes(session, logo_id)
+    if data:
+        return data
+    fallback_id = await fetch_logo_id_from_slug(session, slug)
+    if fallback_id and fallback_id != logo_id:
+        return await fetch_image_bytes(session, fallback_id)
     return None
 
-async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, src_color: discord.Color) -> discord.Embed:
+def _load_crest(data: bytes | None) -> Image.Image:
+    if data:
+        try:
+            return Image.open(io.BytesIO(data)).convert("RGBA")
+        except Exception:
+            pass
+    return Image.open(FREE_AGENT_IMG).convert("RGBA")
+
+def _fit(img: Image.Image, box: int) -> Image.Image:
+    img = img.copy()
+    img.thumbnail((box, box), Image.LANCZOS)
+    return img
+
+def _text_fit(draw: ImageDraw.ImageDraw, text: str, font_path: Path, max_width: int, size: int) -> ImageFont.FreeTypeFont:
+    font = ImageFont.truetype(str(font_path), size)
+    while size > 14 and draw.textlength(text, font=font) > max_width:
+        size -= 2
+        font = ImageFont.truetype(str(font_path), size)
+    return font
+
+def build_banner(from_crest: bytes | None, to_crest: bytes | None,
+                  from_name: str | None, to_name: str | None,
+                  accent_rgb: tuple[int, int, int]) -> io.BytesIO:
+    W, H = 1000, 340
+    canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+
+    crest_box = 240
+    from_img = _fit(_load_crest(from_crest), crest_box)
+    to_img   = _fit(_load_crest(to_crest), crest_box)
+
+    crest_cy = 140
+    from_cx, to_cx = 190, W - 190
+    canvas.alpha_composite(from_img, (from_cx - from_img.width // 2, crest_cy - from_img.height // 2))
+    canvas.alpha_composite(to_img,   (to_cx - to_img.width // 2,   crest_cy - to_img.height // 2))
+
+    # arrow (two chevrons) in the accent color, centered between the crests
+    ax, ay = W // 2, crest_cy
+    chevron_w, chevron_h = 46, 70
+    for offset in (-30, 30):
+        cx = ax + offset
+        draw.polygon(
+            [(cx - chevron_w // 2, ay - chevron_h // 2),
+             (cx + chevron_w // 2, ay),
+             (cx - chevron_w // 2, ay + chevron_h // 2)],
+            fill=(*accent_rgb, 255),
+        )
+
+    # team names below each crest
+    name_y = crest_cy + crest_box // 2 + 24
+    max_name_w = 300
+    for cx, name in ((from_cx, from_name or "Free Agent"), (to_cx, to_name or "Free Agent")):
+        font = _text_fit(draw, name, FONT_BOLD, max_name_w, 34)
+        w = draw.textlength(name, font=font)
+        draw.text((cx - w / 2, name_y), name, font=font, fill=(235, 235, 235, 255))
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+def build_avatar(avatar_bytes: bytes | None) -> io.BytesIO:
+    if avatar_bytes:
+        try:
+            img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+        except Exception:
+            img = Image.open(DEFAULT_AVATAR_IMG).convert("RGBA")
+    else:
+        img = Image.open(DEFAULT_AVATAR_IMG).convert("RGBA")
+
+    side = min(img.size)
+    left = (img.width - side) // 2
+    top = (img.height - side) // 2
+    img = img.crop((left, top, left + side, top + side)).resize((256, 256), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, src_color: discord.Color) -> tuple[discord.Embed, list[discord.File]]:
     user = r.get("username") or "unknown"
     frm_name, frm_slug, frm_logo = r.get("from_name"), r.get("from_slug"), r.get("from_logo")
     to_name,  to_slug,  to_logo  = r.get("to_name"),   r.get("to_slug"),   r.get("to_logo")
@@ -152,34 +215,33 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
         timestamp=datetime.fromisoformat(ts.replace("Z","+00:00")) if ts else None
     )
 
-    # Linked fields if slugs exist
     if frm_slug:
-        emb.add_field(name="From", value=f"[{frm_name or 'Free agent'}](https://virtualprogaming.com/team/{frm_slug})", inline=True)
+        emb.add_field(name="Van", value=f"[{frm_name or 'Free agent'}](https://virtualprogaming.com/team/{frm_slug})", inline=True)
     else:
-        emb.add_field(name="From", value=frm_name or "Free agent", inline=True)
+        emb.add_field(name="Van", value=frm_name or "Free agent", inline=True)
     if to_slug:
-        emb.add_field(name="To", value=f"[{to_name or 'Free agent'}](https://virtualprogaming.com/team/{to_slug})", inline=True)
+        emb.add_field(name="Naar", value=f"[{to_name or 'Free agent'}](https://virtualprogaming.com/team/{to_slug})", inline=True)
     else:
-        emb.add_field(name="To", value=to_name or "Free agent", inline=True)
+        emb.add_field(name="Naar", value=to_name or "Free agent", inline=True)
 
-    emb.add_field(name="Fee", value=str(amt), inline=True)
+    emb.add_field(name="Bedrag", value=str(amt), inline=True)
     emb.set_footer(text=when_str(ts))
 
-    # Try avatar by id
-    avatar_url    = await resolve_image_id(session, r.get("avatar"))
+    avatar_bytes = await fetch_image_bytes(session, r.get("avatar"))
+    from_crest_bytes = await fetch_team_crest_bytes(session, frm_logo, frm_slug)
+    to_crest_bytes   = await fetch_team_crest_bytes(session, to_logo, to_slug)
 
-    # Prefer destination logo, then source. Try ID first, then slug scraping.
-    to_logo_url   = await resolve_image_id(session, to_logo)   or await fetch_logo_from_slug(session, to_slug)
-    from_logo_url = await resolve_image_id(session, frm_logo)  or await fetch_logo_from_slug(session, frm_slug)
+    avatar_buf = build_avatar(avatar_bytes)
+    banner_buf = build_banner(from_crest_bytes, to_crest_bytes, frm_name, to_name, src_color.to_rgb())
 
-    if avatar_url:
-        emb.set_thumbnail(url=avatar_url)
+    files = [
+        discord.File(avatar_buf, filename="avatar.png"),
+        discord.File(banner_buf, filename="banner.png"),
+    ]
+    emb.set_thumbnail(url="attachment://avatar.png")
+    emb.set_image(url="attachment://banner.png")
 
-    big = to_logo_url or from_logo_url
-    if big:
-        emb.set_image(url=big)
-
-    return emb
+    return emb, files
 
 def rid(x) -> int:
     try:
@@ -228,8 +290,8 @@ async def monitor():
                     new_items.sort(key=rid)  # oldest first
                     for r in new_items:
                         try:
-                            embed = await build_embed(session, r, src_label=src["label"], src_color=src["color"])
-                            await channel.send(embed=embed)
+                            embed, files = await build_embed(session, r, src_label=src["label"], src_color=src["color"])
+                            await channel.send(embed=embed, files=files)
                         except Exception:
                             # fallback text
                             frm = r.get("from_name") or "Free agent"
