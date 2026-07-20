@@ -16,6 +16,7 @@ STATE_FILE    = os.getenv("STATE_FILE", "last_id.json")
 ASSETS_DIR  = Path(__file__).parent / "assets"
 ASSET_BASE  = "https://vpg-prod-user-uploads.fra1.cdn.digitaloceanspaces.com/"
 TEAM_API    = "https://api.virtualprogaming.com/public/teams/{slug}/"
+USER_API    = "https://api.virtualprogaming.com/public/users/{username}/"
 FONT_BOLD   = ASSETS_DIR / "DejaVuSans-Bold.ttf"
 FREE_AGENT_IMG   = ASSETS_DIR / "free_agent.png"
 DEFAULT_AVATAR_IMG = ASSETS_DIR / "default_avatar.png"
@@ -43,6 +44,48 @@ client = discord.Client(intents=intents)
 # --- simple caches to avoid repeated fetches ---
 image_bytes_cache: dict[str, bytes | None] = {}   # image_id -> raw bytes (or None if unavailable)
 slug_logo_cache: dict[str, str | None] = {}       # team slug -> logo_id (fallback lookup)
+nationality_cache: dict[str, str | None] = {}     # username -> nationality code (or None if unavailable)
+
+def _tag_flag(subcode: str) -> str:
+    """Build a Unicode subdivision flag (e.g. England/Scotland/Wales) from a lowercase tag string like 'gbeng'."""
+    return chr(0x1F3F4) + "".join(chr(0xE0000 + ord(c)) for c in subcode) + chr(0xE007F)
+
+# Great Britain's home nations use ISO 3166-2 subdivision codes rather than a plain country code.
+SUBDIVISION_FLAGS = {
+    "GB-ENG": _tag_flag("gbeng"),
+    "GB-SCT": _tag_flag("gbsct"),
+    "GB-WLS": _tag_flag("gbwls"),
+}
+
+UNKNOWN_NATIONALITY_FLAG = "🌍"
+
+def flag_for_nationality(code: str | None) -> str:
+    """Return a flag (emoji if recognized, raw code otherwise), or a globe if no code is known."""
+    if not code:
+        return UNKNOWN_NATIONALITY_FLAG
+    code = code.strip().upper()
+    if code in SUBDIVISION_FLAGS:
+        return SUBDIVISION_FLAGS[code]
+    if len(code) == 2 and code.isalpha():
+        base = 0x1F1E6
+        return "".join(chr(base + (ord(c) - ord("A"))) for c in code)
+    return code
+
+async def fetch_nationality(session: aiohttp.ClientSession, username: str | None) -> str | None:
+    if not username:
+        return None
+    if username in nationality_cache:
+        return nationality_cache[username]
+    nat = None
+    try:
+        async with session.get(USER_API.format(username=username), timeout=10) as r:
+            if r.status == 200:
+                payload = await r.json()
+                nat = payload.get("nationality")
+    except Exception:
+        pass
+    nationality_cache[username] = nat
+    return nat
 
 def _empty_state():
     return {"last_ids": {src["key"]: 0 for src in SOURCES}}
@@ -205,7 +248,10 @@ async def build_embed(session: aiohttp.ClientSession, r: dict, src_label: str, s
     amt = r.get("amount") or 0
     ts  = r.get("datetime")
 
-    title = f"[{src_label}] Transfer: {user}"
+    nationality = await fetch_nationality(session, r.get("username"))
+    flag = flag_for_nationality(nationality)
+
+    title = f"[{src_label}] Transfer: {user} {flag}"
     desc  = f"{(frm_name or 'Free agent')} → {(to_name or 'Free agent')}"
 
     emb = discord.Embed(
